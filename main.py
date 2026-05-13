@@ -2,45 +2,35 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel
-import psycopg2
-from psycopg2.extras import RealDictCursor
 import string
 import random
 import os
 import pathlib
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+MONGODB_URI = os.environ.get("MONGODB_URI")
 
 def get_db():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    return client["url-shortener"]
 
 def init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS urls (
-            id SERIAL PRIMARY KEY,
-            short_code VARCHAR(32) UNIQUE NOT NULL,
-            original_url TEXT NOT NULL,
-            clicks INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+    if not MONGODB_URI:
+        return
+    db = get_db()
+    urls = db["urls"]
+    urls.create_index("short_code", unique=True)
+    urls.create_index("original_url")
 
 def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
+    db = get_db()
+    urls = db["urls"]
     while True:
-        code = ''.join(random.choices(chars, k=length))
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM urls WHERE short_code = %s", (code,))
-        if not c.fetchone():
-            conn.close()
+        code = "".join(random.choices(chars, k=length))
+        if not urls.find_one({"short_code": code}):
             return code
-        conn.close()
 
 app = FastAPI(title="URL Shortener")
 
@@ -76,26 +66,27 @@ def shorten_url(req: ShortenRequest):
     if not original.startswith(("http://", "https://")):
         original = "https://" + original
 
+    db = get_db()
+    urls = db["urls"]
+
     if req.custom_code:
         code = req.custom_code.strip()
         if not code or len(code) > 32:
             raise HTTPException(status_code=400, detail="Custom code must be 1-32 characters")
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM urls WHERE short_code = %s", (code,))
-        if c.fetchone():
-            conn.close()
+        if urls.find_one({"short_code": code}):
             raise HTTPException(status_code=409, detail="Custom code already in use")
     else:
         code = generate_short_code()
 
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("INSERT INTO urls (short_code, original_url) VALUES (%s, %s)", (code, original))
-    conn.commit()
-    conn.close()
+    import datetime
+    urls.insert_one({
+        "short_code": code,
+        "original_url": original,
+        "clicks": 0,
+        "created_at": datetime.datetime.utcnow().isoformat()
+    })
 
-    base = os.environ.get("BASE_URL", "https://url-shortener-nine-nu.vercel.app")
+    base = os.environ.get("BASE_URL", "https://" + os.environ.get("VERCEL_URL", "localhost:8000"))
     return ShortenResponse(
         short_code=code,
         short_url=f"{base}/{code}",
@@ -104,43 +95,42 @@ def shorten_url(req: ShortenRequest):
 
 @app.get("/{short_code}")
 def redirect(short_code: str):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT original_url FROM urls WHERE short_code = %s", (short_code,))
-    row = c.fetchone()
-    if not row:
-        conn.close()
+    db = get_db()
+    urls = db["urls"]
+    doc = urls.find_one({"short_code": short_code})
+    if not doc:
         raise HTTPException(status_code=404, detail="Short URL not found")
-    original = row["original_url"]
-    c.execute("UPDATE urls SET clicks = clicks + 1 WHERE short_code = %s", (short_code,))
-    conn.commit()
-    conn.close()
-    return RedirectResponse(url=original)
+    urls.update_one({"short_code": short_code}, {"$inc": {"clicks": 1}})
+    return RedirectResponse(url=doc["original_url"])
 
 @app.get("/api/stats/{short_code}", response_model=URLStats)
 def get_stats(short_code: str):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT short_code, original_url, clicks, created_at FROM urls WHERE short_code = %s", (short_code,))
-    row = c.fetchone()
-    conn.close()
-    if not row:
+    db = get_db()
+    urls = db["urls"]
+    doc = urls.find_one({"short_code": short_code})
+    if not doc:
         raise HTTPException(status_code=404, detail="Short URL not found")
     return URLStats(
-        short_code=row["short_code"],
-        original_url=row["original_url"],
-        clicks=row["clicks"],
-        created_at=str(row["created_at"])
+        short_code=doc["short_code"],
+        original_url=doc["original_url"],
+        clicks=doc.get("clicks", 0),
+        created_at=doc.get("created_at", "")
     )
 
 @app.get("/api/urls")
 def list_urls():
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT short_code, original_url, clicks, created_at FROM urls ORDER BY created_at DESC")
-    rows = c.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    db = get_db()
+    urls = db["urls"]
+    docs = urls.find().sort("created_at", -1)
+    result = []
+    for doc in docs:
+        result.append({
+            "short_code": doc["short_code"],
+            "original_url": doc["original_url"],
+            "clicks": doc.get("clicks", 0),
+            "created_at": doc.get("created_at", "")
+        })
+    return result
 
 # Vercel serverless handler
 from mangum import Mangum
