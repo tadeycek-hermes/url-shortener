@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL Shortener</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>🔗 URL Shortener</h1>
+
+    <div class="card input-card">
+      <input type="text" id="urlInput" placeholder="Paste a long URL here..." />
+      <input type="text" id="customCodeInput" placeholder="Custom short code (optional)" />
+      <button id="shortenBtn">Shorten</button>
+    </div>
+
+    <div id="result" class="card result-card hidden">
+      <p>Your short URL:</p>
+      <div class="short-url-row">
+        <a id="shortUrl" href="#" target="_blank"></a>
+        <button id="copyBtn">Copy</button>
+      </div>
+      <p class="meta" id="metaText"></p>
+    </div>
+
+    <div id="error" class="card error-card hidden"></div>
+
+    <h2>Recent URLs</h2>
+    <div id="urlList" class="url-list"></div>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
