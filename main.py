@@ -10,7 +10,7 @@ import datetime
 from mangum import Mangum
 
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
-client = MongoClient(MONGODB_URI)
+client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000, socketTimeoutMS=10000)
 db = client.hermes_url_shortener
 collection = db.urls
 
