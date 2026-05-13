@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
 from pydantic import BaseModel
 import sqlite3
 import string
 import random
 import os
+import pathlib
 
 DATABASE = "urls.db"
 
@@ -43,10 +44,13 @@ def generate_short_code(length=6):
 
 app = FastAPI(title="URL Shortener")
 
-import pathlib
 BASE_DIR = pathlib.Path(__file__).parent.resolve()
 # Serve static files
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+@app.get("/")
+def read_index():
+    return FileResponse(BASE_DIR / "static" / "index.html")
 
 class ShortenRequest(BaseModel):
     url: str
